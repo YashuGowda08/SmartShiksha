@@ -12,6 +12,13 @@ class Settings(BaseSettings):
     # MongoDB
     MONGODB_URI: str = "mongodb+srv://user:pass@cluster.mongodb.net/?appName=Cluster0"
     MONGODB_DB_NAME: str = "smart_shiksha"
+    # Database selection: 'mongodb', 'postgres' or 'sqlite'
+    # Default to sqlite for maximum portability on any laptop.
+    DB_TYPE: str = "sqlite"
+    # Postgres DSN for SQLAlchemy async engine (used when DB_TYPE='postgres')
+    POSTGRES_DSN: str = "postgresql+asyncpg://devuser:devpass2@127.0.0.1:5432/smart_shiksha"
+    # SQLite DSN for lightweight local development (used when DB_TYPE='sqlite')
+    SQLITE_DSN: str = "sqlite+aiosqlite:///./smart_shiksha.db"
 
     # Clerk
     CLERK_SECRET_KEY: str = ""

@@ -108,9 +108,7 @@ export default function AITutorPage() {
           <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
             <div className={msg.role === "user" ? "chat-user" : "chat-ai"}>
               <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                {msg.content.split("**").map((part, j) =>
-                  j % 2 === 1 ? <strong key={j}>{part}</strong> : part
-                )}
+                {msg.content}
               </div>
             </div>
           </div>

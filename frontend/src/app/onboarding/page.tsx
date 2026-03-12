@@ -46,7 +46,11 @@ export default function OnboardingPage() {
             router.push("/dashboard");
           }
         } catch (error) {
-          console.error("Error checking onboarding status:", error);
+          // If the user is not registered yet, the backend returns 404 —
+          // treat this as "not onboarded" and do not log an error.
+          if ((error as any)?.response?.status !== 404) {
+            console.error("Error checking onboarding status:", error);
+          }
         }
       }
     }

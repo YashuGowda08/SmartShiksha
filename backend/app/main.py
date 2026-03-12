@@ -22,7 +22,7 @@ async def lifespan(app: FastAPI):
     # Startup — create MongoDB indexes
     await init_db()
     print("Smart Shiksha API started!")
-    print(f"MongoDB: Connected")
+    print(f"Database type: {settings.DB_TYPE}")
     yield
     # Shutdown — close connection
     await close_db()
@@ -73,16 +73,34 @@ async def root():
 
 @app.get("/health")
 async def health():
-    from app.database import client
-    try:
-        await client.admin.command("ping")
-        db_status = "connected"
-    except Exception:
+    # Check DB health depending on configured DB_TYPE
+    if settings.DB_TYPE == "mongodb":
+        from app.database import client
+        try:
+            await client.admin.command("ping")
+            db_status = "connected"
+        except Exception:
+            db_status = "disconnected"
+    elif settings.DB_TYPE in ("postgres", "sqlite"):
+        # SQL check (Postgres or SQLite via SQLAlchemy async engine)
+        try:
+            from app import pg_database as pgdb
+            from sqlalchemy import text
+            # Use the effective engine (pgdb.engine) which may be sqlite fallback
+            async with pgdb.engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            db_status = "connected"
+            db_error = None
+        except Exception as e:
+            db_status = "disconnected"
+            db_error = str(e)
+    else:
         db_status = "disconnected"
 
     return {
         "status": "healthy",
         "database": db_status,
+        "db_error": db_error if 'db_error' in locals() else None,
     }
 
 
