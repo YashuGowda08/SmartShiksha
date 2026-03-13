@@ -9,24 +9,30 @@ const isPublicRoute = createRouteMatcher([
   "/api/webhooks(.*)",
 ]);
 
-export default clerkMiddleware(async (auth, request) => {
+export const proxy = clerkMiddleware(async (auth, request) => {
   const { userId } = await auth();
   const isPublic = isPublicRoute(request);
 
-  // If user is logged in and tries to access sign-in or sign-up, redirect to onboarding or dashboard
-  if (userId && (request.nextUrl.pathname.startsWith('/sign-in') || request.nextUrl.pathname.startsWith('/sign-up'))) {
-    return NextResponse.redirect(new URL('/onboarding', request.url));
+  // If user is logged in and tries to access sign-in or sign-up, redirect to onboarding
+  if (
+    userId &&
+    (request.nextUrl.pathname.startsWith("/sign-in") ||
+      request.nextUrl.pathname.startsWith("/sign-up"))
+  ) {
+    return NextResponse.redirect(new URL("/onboarding", request.url));
   }
 
-  // Optional: Redirect from root to dashboard if logged in
+  // Redirect from root to dashboard if logged in
   if (userId && request.nextUrl.pathname === "/") {
-    return NextResponse.redirect(new URL('/dashboard', request.url));
+    return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
   if (!isPublic) {
     await auth.protect();
   }
 });
+
+export default proxy;
 
 export const config = {
   matcher: [
