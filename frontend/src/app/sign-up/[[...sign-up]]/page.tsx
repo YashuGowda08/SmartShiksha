@@ -1,6 +1,19 @@
 import { SignUp } from "@clerk/nextjs";
 
-export default function SignUpPage() {
+type SignUpPageProps = {
+  searchParams: Promise<{ redirect_url?: string | string[] }>;
+};
+
+export default async function SignUpPage({ searchParams }: SignUpPageProps) {
+  const params = await searchParams;
+  const rawRedirectUrl = params.redirect_url;
+  const redirectUrl = Array.isArray(rawRedirectUrl)
+    ? rawRedirectUrl[0] ?? undefined
+    : rawRedirectUrl;
+  const signInUrl = redirectUrl
+    ? `/sign-in?redirect_url=${encodeURIComponent(redirectUrl)}`
+    : "/sign-in";
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-50 via-white to-purple-50 px-4">
       <div className="w-full max-w-md">
@@ -9,6 +22,8 @@ export default function SignUpPage() {
           <p className="text-slate-600">Start your learning journey today</p>
         </div>
         <SignUp
+          forceRedirectUrl={redirectUrl}
+          signInUrl={signInUrl}
           appearance={{
             elements: {
               rootBox: "mx-auto",

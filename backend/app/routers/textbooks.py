@@ -1,54 +1,59 @@
-"""Textbook management router (MongoDB)."""
+"""Textbook management router (SQLite)."""
 import os
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from typing import Optional
-from bson import ObjectId
 from datetime import datetime
 
-from app.database import textbooks_collection
+from app.database import get_db
+from app.models import Textbook
 from app.routers.auth import get_current_user
 
 router = APIRouter(prefix="/textbooks", tags=["Textbooks"])
 
 
-def serialize_doc(doc: dict) -> dict:
-    if not doc:
+def serialize_model(obj) -> dict:
+    if not obj:
         return None
-    doc["id"] = str(doc["_id"])
-    del doc["_id"]
-    for key, val in doc.items():
+    d = {}
+    for c in obj.__table__.columns:
+        val = getattr(obj, c.name)
         if isinstance(val, datetime):
-            doc[key] = val.isoformat()
-    return doc
+            val = val.isoformat()
+        d[c.name] = val
+    d["id"] = str(d.pop("id"))
+    return d
 
 
 @router.get("/")
 async def list_textbooks(
-    student_class: Optional[str] = None, 
+    student_class: Optional[str] = None,
     board: Optional[str] = None,
-    subject: Optional[str] = None
+    subject: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
 ):
     """List available textbooks with flexible filtering."""
-    query = {}
+    stmt = select(Textbook)
     if student_class and student_class != "all":
-        query["class"] = student_class
+        stmt = stmt.where(Textbook.student_class == student_class)
     if board:
-        query["board"] = board
+        stmt = stmt.where(Textbook.board == board)
     if subject:
-        query["subject"] = {"$regex": subject, "$options": "i"}
-        
-    cursor = textbooks_collection.find(query).sort("created_at", -1)
-    textbooks = await cursor.to_list(length=100)
-    return [serialize_doc(t) for t in textbooks]
+        stmt = stmt.where(Textbook.subject.ilike(f"%{subject}%"))
+    stmt = stmt.order_by(Textbook.created_at.desc())
+    result = await db.execute(stmt)
+    return [serialize_model(t) for t in result.scalars().all()]
 
 
 @router.get("/{textbook_id}")
-async def get_textbook(textbook_id: str):
+async def get_textbook(textbook_id: str, db: AsyncSession = Depends(get_db)):
     """Get a specific textbook."""
-    textbook = await textbooks_collection.find_one({"_id": ObjectId(textbook_id)})
+    result = await db.execute(select(Textbook).where(Textbook.id == int(textbook_id)))
+    textbook = result.scalar_one_or_none()
     if not textbook:
         raise HTTPException(status_code=404, detail="Textbook not found")
-    return serialize_doc(textbook)
+    return serialize_model(textbook)
 
 
 @router.post("/")
@@ -59,6 +64,7 @@ async def upload_textbook(
     subject: str = Form(""),
     file: UploadFile = File(None),
     user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Upload a new textbook (admin only)."""
     file_url = ""
@@ -67,33 +73,38 @@ async def upload_textbook(
     if file:
         content = await file.read()
         file_size_mb = round(len(content) / (1024 * 1024), 1)
-        
-        # Save to local uploads folder
+        os.makedirs("uploads", exist_ok=True)
         file_path = os.path.join("uploads", file.filename)
         with open(file_path, "wb") as f:
             f.write(content)
-            
         file_url = f"/uploads/{file.filename}"
 
-    doc = {
-        "title": title,
-        "class": student_class,
-        "board": board,
-        "subject": subject,
-        "file_url": file_url,
-        "file_size_mb": file_size_mb,
-        "uploaded_by": user["id"],
-        "created_at": datetime.utcnow(),
-    }
-    result = await textbooks_collection.insert_one(doc)
-    doc["_id"] = result.inserted_id
-    return serialize_doc(doc)
+    tb = Textbook(
+        title=title,
+        student_class=student_class,
+        board=board,
+        subject=subject,
+        file_url=file_url,
+        file_size_mb=file_size_mb,
+        uploaded_by=user["id"],
+    )
+    db.add(tb)
+    await db.commit()
+    await db.refresh(tb)
+    return serialize_model(tb)
 
 
 @router.delete("/{textbook_id}")
-async def delete_textbook(textbook_id: str, user: dict = Depends(get_current_user)):
+async def delete_textbook(
+    textbook_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Delete a textbook (admin only)."""
-    result = await textbooks_collection.delete_one({"_id": ObjectId(textbook_id)})
-    if result.deleted_count == 0:
+    result = await db.execute(select(Textbook).where(Textbook.id == int(textbook_id)))
+    tb = result.scalar_one_or_none()
+    if not tb:
         raise HTTPException(status_code=404, detail="Textbook not found")
+    await db.delete(tb)
+    await db.commit()
     return {"message": "Textbook deleted"}

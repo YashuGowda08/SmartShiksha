@@ -1,30 +1,28 @@
-"""Mock test CRUD and evaluation router (MongoDB)."""
+"""Mock test CRUD and evaluation router (SQLite)."""
 from fastapi import APIRouter, Depends, HTTPException
-from typing import Optional, List
-from bson import ObjectId
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from typing import Optional
 from datetime import datetime
 
-from app.database import (
-    mock_tests_collection, test_questions_collection,
-    student_attempts_collection, student_answers_collection,
-    questions_collection
-)
+from app.database import get_db
+from app.models import MockTest, TestQuestion, StudentAttempt
 from app.routers.auth import get_current_user
 
 router = APIRouter(prefix="/mock-tests", tags=["Mock Tests"])
 
 
-def serialize_doc(doc: dict) -> dict:
-    if not doc:
+def serialize_model(obj) -> dict:
+    if not obj:
         return None
-    doc["id"] = str(doc["_id"])
-    del doc["_id"]
-    for key, val in doc.items():
+    d = {}
+    for c in obj.__table__.columns:
+        val = getattr(obj, c.name)
         if isinstance(val, datetime):
-            doc[key] = val.isoformat()
-        if isinstance(val, ObjectId):
-            doc[key] = str(val)
-    return doc
+            val = val.isoformat()
+        d[c.name] = val
+    d["id"] = str(d.pop("id"))
+    return d
 
 
 @router.get("/")
@@ -32,65 +30,87 @@ async def list_tests(
     test_type: Optional[str] = None,
     student_class: Optional[str] = None,
     subject_name: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
 ):
     """List available mock tests."""
-    query = {"is_active": True}
+    stmt = select(MockTest).where(MockTest.is_active == True)
     if test_type:
-        query["test_type"] = test_type
+        stmt = stmt.where(MockTest.test_type == test_type)
     if student_class:
-        query["student_class"] = student_class
+        stmt = stmt.where(MockTest.student_class == student_class)
     if subject_name:
-        query["subject_name"] = subject_name
-
-    cursor = mock_tests_collection.find(query).sort("created_at", -1)
-    tests = await cursor.to_list(length=50)
-    return [serialize_doc(t) for t in tests]
+        stmt = stmt.where(MockTest.subject_name == subject_name)
+    stmt = stmt.order_by(MockTest.created_at.desc())
+    result = await db.execute(stmt)
+    tests = result.scalars().all()
+    return [serialize_model(t) for t in tests]
 
 
 @router.get("/{test_id}")
-async def get_test(test_id: str):
+async def get_test(test_id: str, db: AsyncSession = Depends(get_db)):
     """Get a specific test with its questions."""
-    test = await mock_tests_collection.find_one({"_id": ObjectId(test_id)})
+    result = await db.execute(select(MockTest).where(MockTest.id == int(test_id)))
+    test = result.scalar_one_or_none()
     if not test:
         raise HTTPException(status_code=404, detail="Test not found")
 
-    # Get associated questions (handle both string and ObjectId test_ids)
-    cursor = test_questions_collection.find({
-        "$or": [
-            {"test_id": test_id},
-            {"test_id": ObjectId(test_id)}
-        ]
-    }).sort("order_index", 1)
-    questions = await cursor.to_list(length=200)
+    q_result = await db.execute(
+        select(TestQuestion)
+        .where(TestQuestion.test_id == int(test_id))
+        .order_by(TestQuestion.order_index)
+    )
+    questions = q_result.scalars().all()
 
-    test_data = serialize_doc(test)
-    test_data["questions"] = [serialize_doc(q) for q in questions]
+    test_data = serialize_model(test)
+    test_data["questions"] = [serialize_model(q) for q in questions]
     return test_data
 
 
 @router.post("/")
-async def create_test(data: dict):
+async def create_test(data: dict, db: AsyncSession = Depends(get_db)):
     """Create a new mock test (admin only)."""
-    data["is_active"] = True
-    data["created_at"] = datetime.utcnow()
-    result = await mock_tests_collection.insert_one(data)
+    test = MockTest(
+        title=data.get("title", ""),
+        description=data.get("description", ""),
+        test_type=data.get("test_type", "Chapter Test"),
+        student_class=data.get("student_class"),
+        subject_name=data.get("subject_name"),
+        duration_minutes=data.get("duration_minutes", 60),
+        total_marks=data.get("total_marks", 100),
+        question_count=data.get("question_count", 10),
+        is_active=True,
+    )
+    db.add(test)
+    await db.commit()
+    await db.refresh(test)
 
-    # If questions are provided inline, add them
     if "questions" in data:
-        for i, q in enumerate(data["questions"]):
-            q["test_id"] = str(result.inserted_id)
-            q["order_index"] = i
-            q["created_at"] = datetime.utcnow()
-        await test_questions_collection.insert_many(data["questions"])
+        for i, q_data in enumerate(data["questions"]):
+            tq = TestQuestion(
+                test_id=test.id,
+                question_text=q_data.get("question_text", ""),
+                question_type=q_data.get("question_type", "MCQ"),
+                options=q_data.get("options", []),
+                correct_answer=q_data.get("correct_answer", ""),
+                marks=q_data.get("marks", 1),
+                order_index=i,
+            )
+            db.add(tq)
+        await db.commit()
 
-    data["_id"] = result.inserted_id
-    return serialize_doc(data)
+    return serialize_model(test)
 
 
 @router.post("/{test_id}/submit")
-async def submit_test(test_id: str, req: dict, user: dict = Depends(get_current_user)):
+async def submit_test(
+    test_id: str,
+    req: dict,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Submit a test attempt and auto-evaluate."""
-    test = await mock_tests_collection.find_one({"_id": ObjectId(test_id)})
+    result = await db.execute(select(MockTest).where(MockTest.id == int(test_id)))
+    test = result.scalar_one_or_none()
     if not test:
         raise HTTPException(status_code=404, detail="Test not found")
 
@@ -99,7 +119,6 @@ async def submit_test(test_id: str, req: dict, user: dict = Depends(get_current_
     proctoring_warnings = req.get("proctoring_warnings", 0)
     auto_submitted = req.get("auto_submitted", False)
 
-    # Auto-evaluate MCQs
     total_score = 0
     total_marks = 0
     evaluated_answers = []
@@ -108,9 +127,15 @@ async def submit_test(test_id: str, req: dict, user: dict = Depends(get_current_
         q_id = answer.get("question_id")
         student_ans = answer.get("student_answer", "")
 
-        question = await test_questions_collection.find_one({"_id": ObjectId(q_id)}) if q_id and len(q_id) == 24 else None
+        question = None
+        if q_id:
+            try:
+                q_result = await db.execute(select(TestQuestion).where(TestQuestion.id == int(q_id)))
+                question = q_result.scalar_one_or_none()
+            except (ValueError, TypeError):
+                pass
+
         if not question:
-            # Try to find by other means or use a generic score
             evaluated_answers.append({
                 "question_id": q_id,
                 "student_answer": student_ans,
@@ -120,11 +145,10 @@ async def submit_test(test_id: str, req: dict, user: dict = Depends(get_current_
             total_marks += 1
             continue
 
-        marks = question.get("marks", 1)
+        marks = question.marks or 1
         total_marks += marks
-        correct_answer = question.get("correct_answer", "")
+        correct_answer = question.correct_answer or ""
         is_correct = student_ans.strip().lower() == correct_answer.strip().lower() if correct_answer else False
-
         marks_obtained = marks if is_correct else 0
         total_score += marks_obtained
 
@@ -136,27 +160,26 @@ async def submit_test(test_id: str, req: dict, user: dict = Depends(get_current_
             "marks_obtained": marks_obtained,
         })
 
-    # Calculate percentage
     percentage = (total_score / total_marks * 100) if total_marks > 0 else 0
 
-    # Save attempt
-    attempt_doc = {
-        "user_id": user["id"],
-        "test_id": test_id,
-        "score": total_score,
-        "total_marks": total_marks,
-        "percentage": round(percentage, 1),
-        "time_taken_seconds": time_taken,
-        "proctoring_warnings": proctoring_warnings,
-        "auto_submitted": auto_submitted,
-        "answers": evaluated_answers,
-        "completed_at": datetime.utcnow(),
-        "created_at": datetime.utcnow(),
-    }
-    result = await student_attempts_collection.insert_one(attempt_doc)
+    attempt = StudentAttempt(
+        user_id=user["id"],
+        test_id=test_id,
+        score=total_score,
+        total_marks=total_marks,
+        percentage=round(percentage, 1),
+        time_taken_seconds=time_taken,
+        proctoring_warnings=proctoring_warnings,
+        auto_submitted=auto_submitted,
+        answers=evaluated_answers,
+        completed_at=datetime.utcnow(),
+    )
+    db.add(attempt)
+    await db.commit()
+    await db.refresh(attempt)
 
     return {
-        "attempt_id": str(result.inserted_id),
+        "attempt_id": str(attempt.id),
         "score": total_score,
         "total_marks": total_marks,
         "percentage": round(percentage, 1),
@@ -167,21 +190,32 @@ async def submit_test(test_id: str, req: dict, user: dict = Depends(get_current_
 
 
 @router.get("/{test_id}/attempts")
-async def get_test_attempts(test_id: str, user: dict = Depends(get_current_user)):
+async def get_test_attempts(
+    test_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Get all attempts for a test by the current user."""
-    cursor = student_attempts_collection.find({
-        "user_id": user["id"],
-        "test_id": test_id,
-    }).sort("created_at", -1)
-    attempts = await cursor.to_list(length=20)
-    return [serialize_doc(a) for a in attempts]
+    result = await db.execute(
+        select(StudentAttempt)
+        .where(StudentAttempt.user_id == user["id"], StudentAttempt.test_id == test_id)
+        .order_by(StudentAttempt.created_at.desc())
+    )
+    attempts = result.scalars().all()
+    return [serialize_model(a) for a in attempts]
 
 
 @router.get("/my/attempts")
-async def get_my_attempts(user: dict = Depends(get_current_user)):
+async def get_my_attempts(
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Get all test attempts for the current user."""
-    cursor = student_attempts_collection.find(
-        {"user_id": user["id"]}
-    ).sort("created_at", -1).limit(30)
-    attempts = await cursor.to_list(length=30)
-    return [serialize_doc(a) for a in attempts]
+    result = await db.execute(
+        select(StudentAttempt)
+        .where(StudentAttempt.user_id == user["id"])
+        .order_by(StudentAttempt.created_at.desc())
+        .limit(30)
+    )
+    attempts = result.scalars().all()
+    return [serialize_model(a) for a in attempts]

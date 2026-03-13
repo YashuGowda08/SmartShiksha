@@ -1,6 +1,12 @@
 """Application configuration using pydantic-settings."""
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from typing import Optional
+from pathlib import Path
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_SQLITE_PATH = str(BASE_DIR / "smart_shiksha.db")
 
 
 class Settings(BaseSettings):
@@ -9,15 +15,45 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     API_VERSION: str = "v1"
 
-    # MongoDB
-    MONGODB_URI: str = "mongodb+srv://user:pass@cluster.mongodb.net/?appName=Cluster0"
-    MONGODB_DB_NAME: str = "smart_shiksha"
+    # ── Database selector: sqlite | postgres | mongodb ──
+    DB_TYPE: str = "sqlite"
 
-    # Clerk
-    CLERK_SECRET_KEY: str = ""
-    CLERK_PUBLISHABLE_KEY: str = ""
+    # SQLite (used when DB_TYPE=sqlite)
+    SQLITE_PATH: str = DEFAULT_SQLITE_PATH
 
-    # Groq
+    # PostgreSQL (used when DB_TYPE=postgres)
+    POSTGRES_HOST: str = "localhost"
+    POSTGRES_PORT: int = 5432
+    POSTGRES_USER: str = "postgres"
+    POSTGRES_PASSWORD: str = "postgres"
+    POSTGRES_DB: str = "smart_shiksha"
+
+    # MongoDB (used when DB_TYPE=mongodb)
+    MONGODB_URL: str = "mongodb://localhost:27017"
+    MONGODB_DB: str = "smart_shiksha"
+
+    # Legacy — if set, overrides the auto-constructed URL for SQL databases
+    DATABASE_URL: Optional[str] = None
+
+    @property
+    def database_url(self) -> str:
+        """Construct the database URL based on DB_TYPE."""
+        if self.DATABASE_URL:
+            return self.DATABASE_URL
+        if self.DB_TYPE == "postgres":
+            return (
+                f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
+                f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+            )
+        # Default: sqlite
+        return f"sqlite+aiosqlite:///{self.SQLITE_PATH}"
+
+    # Auth
+    JWT_SECRET: str = "smart-shiksha-dev-secret-change-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_DAYS: int = 30
+
+    # Groq (cloud AI)
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
@@ -35,6 +71,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 
 @lru_cache()

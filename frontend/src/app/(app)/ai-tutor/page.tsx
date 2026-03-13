@@ -5,6 +5,8 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { aiTutorAPI } from "@/lib/api";
 import { Brain, Send, Sparkles, Globe, Trash2 } from "lucide-react";
 import { Language } from "@/lib/i18n";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface Message {
   role: "user" | "assistant";
@@ -107,10 +109,8 @@ export default function AITutorPage() {
         {messages.map((msg, i) => (
           <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
             <div className={msg.role === "user" ? "chat-user" : "chat-ai"}>
-              <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                {msg.content.split("**").map((part, j) =>
-                  j % 2 === 1 ? <strong key={j}>{part}</strong> : part
-                )}
+              <div className="prose prose-sm prose-slate max-w-none text-sm leading-relaxed">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
               </div>
             </div>
           </div>

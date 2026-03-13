@@ -1,151 +1,170 @@
-"""Student progress tracking router (MongoDB)."""
+"""Student progress tracking router (SQLite)."""
 from fastapi import APIRouter, Depends, HTTPException
-from bson import ObjectId
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func
 from datetime import datetime
 
-from app.database import (
-    progress_collection, student_attempts_collection,
-    topics_collection, subjects_collection, chapters_collection
-)
+from app.database import get_db
+from app.models import Progress, StudentAttempt, Topic, Subject, Chapter
 from app.routers.auth import get_current_user
 
 router = APIRouter(prefix="/progress", tags=["Progress"])
 
 
 @router.post("/update")
-async def update_progress(data: dict, user: dict = Depends(get_current_user)):
+async def update_progress(
+    data: dict,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Update topic progress for the current user."""
     topic_id = data.get("topic_id")
     completed = data.get("completed", False)
     time_spent = data.get("time_spent_seconds", 0)
 
-    existing = await progress_collection.find_one({
-        "user_id": user["id"],
-        "topic_id": topic_id,
-    })
+    result = await db.execute(
+        select(Progress).where(
+            Progress.user_id == user["id"], Progress.topic_id == topic_id
+        )
+    )
+    existing = result.scalar_one_or_none()
 
     if existing:
-        await progress_collection.update_one(
-            {"_id": existing["_id"]},
-            {"$set": {
-                "completed": completed,
-                "updated_at": datetime.utcnow(),
-            }, "$inc": {
-                "time_spent_seconds": time_spent,
-            }}
-        )
+        existing.completed = completed
+        existing.time_spent_seconds = (existing.time_spent_seconds or 0) + time_spent
+        existing.updated_at = datetime.utcnow()
     else:
-        await progress_collection.insert_one({
-            "user_id": user["id"],
-            "topic_id": topic_id,
-            "completed": completed,
-            "time_spent_seconds": time_spent,
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
-        })
-
+        db.add(Progress(
+            user_id=user["id"],
+            topic_id=topic_id,
+            completed=completed,
+            time_spent_seconds=time_spent,
+        ))
+    await db.commit()
     return {"message": "Progress updated"}
 
 
 @router.get("/dashboard")
-async def get_dashboard(user: dict = Depends(get_current_user)):
+async def get_dashboard(
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Get dashboard statistics for the current user."""
+    uid = user["id"]
+
     # Topics completed
-    topics_completed = await progress_collection.count_documents({
-        "user_id": user["id"],
-        "completed": True,
-    })
-    total_topics = await topics_collection.count_documents({})
+    r = await db.execute(
+        select(func.count()).select_from(Progress).where(
+            Progress.user_id == uid, Progress.completed == True
+        )
+    )
+    topics_completed = r.scalar() or 0
+
+    r = await db.execute(select(func.count()).select_from(Topic))
+    total_topics = r.scalar() or 0
 
     # Tests taken
-    tests_taken = await student_attempts_collection.count_documents({
-        "user_id": user["id"]
-    })
+    r = await db.execute(
+        select(func.count()).select_from(StudentAttempt).where(
+            StudentAttempt.user_id == uid
+        )
+    )
+    tests_taken = r.scalar() or 0
 
     # Average score
-    pipeline = [
-        {"$match": {"user_id": user["id"]}},
-        {"$group": {"_id": None, "avg_score": {"$avg": "$percentage"}}}
-    ]
-    avg_result = await student_attempts_collection.aggregate(pipeline).to_list(length=1)
-    average_score = round(avg_result[0]["avg_score"], 1) if avg_result else 0
+    r = await db.execute(
+        select(func.avg(StudentAttempt.percentage)).where(
+            StudentAttempt.user_id == uid
+        )
+    )
+    average_score = round(r.scalar() or 0, 1)
 
     # Total study time
-    time_pipeline = [
-        {"$match": {"user_id": user["id"]}},
-        {"$group": {"_id": None, "total": {"$sum": "$time_spent_seconds"}}}
-    ]
-    time_result = await progress_collection.aggregate(time_pipeline).to_list(length=1)
-    total_seconds = time_result[0]["total"] if time_result else 0
+    r = await db.execute(
+        select(func.sum(Progress.time_spent_seconds)).where(
+            Progress.user_id == uid
+        )
+    )
+    total_seconds = r.scalar() or 0
     total_hours = round(total_seconds / 3600, 1)
 
     # Subject progress
     subject_progress = {}
-    subjects = await subjects_collection.find().to_list(length=20)
-    for subject in subjects:
-        subject_id = str(subject["_id"])
-        # Get chapters for this subject
-        chapter_cursor = chapters_collection.find({"subject_id": subject_id})
-        chapter_ids = [str(ch["_id"]) async for ch in chapter_cursor]
+    subjects_r = await db.execute(select(Subject))
+    for subj in subjects_r.scalars().all():
+        ch_r = await db.execute(
+            select(Chapter.id).where(Chapter.subject_id == subj.id)
+        )
+        chapter_ids = [c for c in ch_r.scalars().all()]
 
-        # Get topics for these chapters
-        topic_cursor = topics_collection.find({"chapter_id": {"$in": chapter_ids}})
-        topic_ids = [str(tp["_id"]) async for tp in topic_cursor]
+        if chapter_ids:
+            tp_r = await db.execute(
+                select(Topic.id).where(Topic.chapter_id.in_(chapter_ids))
+            )
+            topic_ids = [str(t) for t in tp_r.scalars().all()]
+        else:
+            topic_ids = []
 
         total_in_subject = len(topic_ids)
-        completed_in_subject = await progress_collection.count_documents({
-            "user_id": user["id"],
-            "topic_id": {"$in": topic_ids},
-            "completed": True,
-        }) if topic_ids else 0
+        if topic_ids:
+            cr = await db.execute(
+                select(func.count()).select_from(Progress).where(
+                    Progress.user_id == uid,
+                    Progress.topic_id.in_(topic_ids),
+                    Progress.completed == True,
+                )
+            )
+            completed_in_subject = cr.scalar() or 0
+        else:
+            completed_in_subject = 0
 
-        pct = round((completed_in_subject / total_in_subject * 100), 1) if total_in_subject > 0 else 0
-        subject_progress[subject.get("name", "Unknown")] = {
+        pct = round(completed_in_subject / total_in_subject * 100, 1) if total_in_subject else 0
+        subject_progress[subj.name or "Unknown"] = {
             "completed": completed_in_subject,
             "total": total_in_subject,
             "percentage": pct,
         }
 
     # Recent scores
-    recent_cursor = student_attempts_collection.find(
-        {"user_id": user["id"]}
-    ).sort("created_at", -1).limit(5)
-    recent_scores = []
-    async for attempt in recent_cursor:
-        recent_scores.append({
-            "test_id": attempt.get("test_id"),
-            "score": attempt.get("score", 0),
-            "percentage": attempt.get("percentage", 0),
-            "date": attempt["created_at"].isoformat() if isinstance(attempt.get("created_at"), datetime) else "",
-        })
-
-    # Recommended topics (weak areas based on low scores)
-    weak_pipeline = [
-        {"$match": {"user_id": user["id"]}},
-        {"$unwind": "$answers"},
-        {"$match": {"answers.is_correct": False}},
-        {"$group": {"_id": "$answers.question_id", "fails": {"$sum": 1}}},
-        {"$sort": {"fails": -1}},
-        {"$limit": 5},
+    recent_r = await db.execute(
+        select(StudentAttempt)
+        .where(StudentAttempt.user_id == uid)
+        .order_by(StudentAttempt.created_at.desc())
+        .limit(5)
+    )
+    recent_scores = [
+        {
+            "test_id": a.test_id,
+            "score": a.score,
+            "percentage": a.percentage,
+            "date": a.created_at.isoformat() if a.created_at else "",
+        }
+        for a in recent_r.scalars().all()
     ]
-    # Simplified recommended topics
-    recommended = []
-    uncompleted_cursor = topics_collection.find({
-        "_id": {"$nin": [
-            ObjectId(p["topic_id"])
-            for p in await progress_collection.find(
-                {"user_id": user["id"], "completed": True},
-                {"topic_id": 1}
-            ).to_list(length=100)
-            if ObjectId.is_valid(p.get("topic_id", ""))
-        ]}
-    }).limit(3)
-    async for topic in uncompleted_cursor:
-        recommended.append({
-            "topic_id": str(topic["_id"]),
-            "name": topic.get("name", "Unknown"),
-            "score": 0,
-        })
+
+    # Recommended topics (uncompleted)
+    completed_r = await db.execute(
+        select(Progress.topic_id).where(
+            Progress.user_id == uid, Progress.completed == True
+        )
+    )
+    completed_topic_ids = [t for t in completed_r.scalars().all()]
+    stmt = select(Topic)
+    if completed_topic_ids:
+        int_ids = []
+        for tid in completed_topic_ids:
+            try:
+                int_ids.append(int(tid))
+            except (ValueError, TypeError):
+                pass
+        if int_ids:
+            stmt = stmt.where(Topic.id.not_in(int_ids))
+    stmt = stmt.limit(3)
+    rec_r = await db.execute(stmt)
+    recommended = [
+        {"topic_id": str(t.id), "name": t.name or "Unknown", "score": 0}
+        for t in rec_r.scalars().all()
+    ]
 
     return {
         "topics_completed": topics_completed,
@@ -160,15 +179,19 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
 
 
 @router.get("/topics")
-async def get_topic_progress(user: dict = Depends(get_current_user)):
+async def get_topic_progress(
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Get progress for all topics."""
-    cursor = progress_collection.find({"user_id": user["id"]})
-    progress_list = await cursor.to_list(length=500)
+    result = await db.execute(
+        select(Progress).where(Progress.user_id == user["id"])
+    )
     return [
         {
-            "topic_id": p.get("topic_id"),
-            "completed": p.get("completed", False),
-            "time_spent_seconds": p.get("time_spent_seconds", 0),
+            "topic_id": p.topic_id,
+            "completed": p.completed,
+            "time_spent_seconds": p.time_spent_seconds or 0,
         }
-        for p in progress_list
+        for p in result.scalars().all()
     ]

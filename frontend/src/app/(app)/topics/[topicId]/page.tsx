@@ -9,12 +9,60 @@ import {
   ArrowLeft, BookOpen, Lightbulb, HelpCircle, Brain,
   CheckCircle, ChevronRight
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface TopicData {
   id: string;
   name: string;
   explanation: string;
   examples: string;
+}
+
+function cleanTopicText(raw: unknown, preferredKey?: "explanation" | "examples"): string {
+  if (raw == null) return "";
+
+  const parseJson = (value: string) => {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  };
+
+  if (Array.isArray(raw)) {
+    return raw.map((item) => String(item).trim()).filter(Boolean).join("\n");
+  }
+
+  if (typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    if (preferredKey && obj[preferredKey] != null) {
+      return cleanTopicText(obj[preferredKey]);
+    }
+    if (obj.explanation != null) return cleanTopicText(obj.explanation);
+    if (obj.examples != null) return cleanTopicText(obj.examples);
+    return "";
+  }
+
+  let text = String(raw).trim();
+  if (!text) return "";
+
+  const parsed = parseJson(text);
+  if (parsed != null) {
+    return cleanTopicText(parsed, preferredKey);
+  }
+
+  text = text
+    .replace(/^\s*\{\s*"(explanation|examples)"\s*:\s*"?/i, "")
+    .replace(/"?\s*\}\s*$/i, "")
+    .replace(/\\n/g, "\n")
+    .trim();
+
+  if (text.startsWith('"') && text.endsWith('"') && text.length > 1) {
+    text = text.slice(1, -1).trim();
+  }
+
+  return text;
 }
 
 export default function TopicDetailPage() {
@@ -30,7 +78,11 @@ export default function TopicDetailPage() {
     const fetchTopic = async () => {
       try {
         const res = await contentAPI.getTopic(params.topicId as string, language);
-        setTopic(res.data);
+        setTopic({
+          ...res.data,
+          explanation: cleanTopicText(res.data?.explanation, "explanation"),
+          examples: cleanTopicText(res.data?.examples, "examples"),
+        });
       } catch {
         setTopic({
           id: params.topicId as string,
@@ -160,32 +212,12 @@ A ladder 10m long reaches a window 8m above the ground. Find the distance of the
       <div className="card">
         {activeTab === "explanation" && (
           <div className="prose prose-slate max-w-none">
-            {topic.explanation.split("\n").map((line, i) => {
-              if (line.startsWith("###")) return <h3 key={i} className="text-lg font-bold mt-6 mb-2 text-indigo-700">{line.replace(/###\s?/, "")}</h3>;
-              if (line.startsWith("##")) return <h2 key={i} className="text-xl font-bold mt-6 mb-3 gradient-text">{line.replace(/##\s?/, "")}</h2>;
-              if (line.startsWith("- **")) {
-                const parts = line.replace("- ", "").split("**");
-                return (
-                  <div key={i} className="flex items-start gap-2 my-2 ml-4">
-                    <ChevronRight className="w-4 h-4 text-indigo-500 mt-1 shrink-0" />
-                    <span><strong>{parts[1]}</strong>{parts[2]}</span>
-                  </div>
-                );
-              }
-              if (line.trim() === "") return <br key={i} />;
-              return <p key={i} className="my-2 leading-relaxed">{line}</p>;
-            })}
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{topic.explanation}</ReactMarkdown>
           </div>
         )}
         {activeTab === "examples" && (
           <div className="prose prose-slate max-w-none">
-            {topic.examples.split("\n").map((line, i) => {
-              if (line.startsWith("###")) return <h3 key={i} className="text-lg font-bold mt-6 mb-2 text-emerald-700">{line.replace(/###\s?/, "")}</h3>;
-              if (line.startsWith("**Solution")) return <p key={i} className="font-semibold text-indigo-700 mt-3">{line.replace(/\*\*/g, "")}</p>;
-              if (line.startsWith("- ")) return <li key={i} className="ml-6 my-1">{line.replace("- ", "")}</li>;
-              if (line.trim() === "") return <br key={i} />;
-              return <p key={i} className="my-1">{line}</p>;
-            })}
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{topic.examples}</ReactMarkdown>
           </div>
         )}
         {activeTab === "practice" && (

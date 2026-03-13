@@ -1,4 +1,4 @@
-"""Smart Shiksha — FastAPI Application Entry Point (MongoDB)."""
+"""Smart Shiksha — FastAPI Application Entry Point."""
 import os
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,23 +8,23 @@ from contextlib import asynccontextmanager
 
 from app.config import get_settings
 from app.database import init_db, close_db
-from app.routers import auth, subjects, ai_tutor, exams, mock_tests, progress, admin, textbooks, community
+from app.routers import auth, subjects, ai_tutor, exams, mock_tests, progress, admin, textbooks, community, offline
 
 settings = get_settings()
 
 # Ensure uploads directory exists early (before mounting)
 os.makedirs("uploads", exist_ok=True)
 
+DB_LABELS = {"sqlite": "SQLite", "postgres": "PostgreSQL", "mongodb": "MongoDB"}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
-    # Startup — create MongoDB indexes
     await init_db()
-    print("Smart Shiksha API started!")
-    print(f"MongoDB: Connected")
+    db_label = DB_LABELS.get(settings.DB_TYPE, settings.DB_TYPE)
+    print(f"Smart Shiksha API started!  [{db_label}]")
     yield
-    # Shutdown — close connection
     await close_db()
     print("Smart Shiksha API shut down")
 
@@ -56,6 +56,7 @@ app.include_router(progress.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(textbooks.router, prefix="/api/v1")
 app.include_router(community.router, prefix="/api/v1")
+app.include_router(offline.router, prefix="/api/v1")
 
 # Static files for textbook uploads
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
@@ -73,16 +74,9 @@ async def root():
 
 @app.get("/health")
 async def health():
-    from app.database import client
-    try:
-        await client.admin.command("ping")
-        db_status = "connected"
-    except Exception:
-        db_status = "disconnected"
-
     return {
         "status": "healthy",
-        "database": db_status,
+        "database": settings.DB_TYPE,
     }
 
 

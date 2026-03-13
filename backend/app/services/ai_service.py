@@ -1,14 +1,14 @@
-"""AI Tutor service using Groq + LangChain."""
+"""AI Tutor service using Groq cloud API."""
 from langchain_groq import ChatGroq
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.schema import HumanMessage, AIMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage
 from app.config import get_settings
 
 settings = get_settings()
 
 
 def get_llm():
-    """Get LangChain Groq LLM instance."""
+    """Get LangChain LLM instance (Groq cloud)."""
     return ChatGroq(
         api_key=settings.GROQ_API_KEY,
         model_name=settings.GROQ_MODEL,

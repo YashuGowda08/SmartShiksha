@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@clerk/nextjs";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { progressAPI } from "@/lib/api";
+import { progressAPI, authAPI } from "@/lib/api";
 import {
   BookOpen, Trophy, Clock, Target, Brain, ChevronRight,
   TrendingUp, BarChart3
@@ -37,6 +37,8 @@ export default function DashboardPage() {
       try {
         const token = await getToken();
         if (token) {
+          // Ensure user is registered before fetching dashboard
+          await authAPI.register(token);
           const res = await progressAPI.getDashboard(token);
           setData(res.data);
         }
