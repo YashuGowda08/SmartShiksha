@@ -2,23 +2,30 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies (libpq for asyncpg, build-essential for Rust compilation)
+# Configure Cargo for better caching and writable temp space
+ENV CARGO_HOME=/tmp/cargo \
+    RUSTFLAGS="-C target-dir=/tmp/rust-target" \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_PREFER_BINARY=1
+
+# Install system dependencies (libpq for asyncpg)
 RUN apt-get update && apt-get install -y \
-    build-essential \
     gcc \
     libpq-dev \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip to latest version (helps with wheel caching)
+# Upgrade pip/setuptools/wheel first
 RUN pip install --upgrade pip setuptools wheel
 
-# Install Python dependencies (prefer wheels, avoid unnecessary compilation)
+# Create temp directories with proper permissions
+RUN mkdir -p /tmp/cargo /tmp/rust-target && chmod 777 /tmp/cargo /tmp/rust-target
+
+# Install Python dependencies - pre-install wheels separately to avoid compilation failures
 COPY requirements.txt .
-RUN pip install --no-cache-dir \
-    --prefer-binary \
-    --only-binary :all: \
-    -r requirements.txt || pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade --prefer-binary \
+    pydantic==2.6.4 \
+    pydantic-core==2.16.3 \
+    && pip install --prefer-binary -r requirements.txt
 
 # Copy application
 COPY . .

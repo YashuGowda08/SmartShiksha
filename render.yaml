@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: smartshiksha-backend
+    env: python
+    plan: standard
+    
+    # Build configuration
+    buildCommand: >
+      pip install --upgrade pip setuptools wheel &&
+      pip install --no-cache-dir --prefer-binary --only-binary :all: pydantic pydantic-core &&
+      pip install --no-cache-dir -r requirements.txt
+    
+    # Start command
+    startCommand: cd backend && gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
+    
+    # Environment
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: PIP_NO_CACHE_DIR
+        value: "1"
+      - key: PIP_PREFER_BINARY
+        value: "1"
+    
+    # Health check
+    healthCheckPath: /health
+    healthCheckInterval: 300
+    healthCheckTimeout: 10
+    
+    # Dockerfile (use custom Dockerfile)
+    dockerfilePath: ./backend/Dockerfile
+
+  - type: web
+    name: smartshiksha-frontend
+    env: node
+    plan: standard
+    
+    buildCommand: >
+      npm install &&
+      npm run build
+    
+    startCommand: npm start
+    
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        value: https://smartshiksha-backend.onrender.com/api/v1
+    
+    routes:
+      - path: /
+        destination: /frontend
