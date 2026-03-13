@@ -295,7 +295,9 @@ function PostCard({ post, onToggleReplies, onReplyAdded }: { post: Post, onToggl
   const getImageUrl = (url?: string) => {
     if (!url) return null;
     if (url.startsWith("http")) return url;
-    return `http://localhost:8000${url}`;
+    const backendOrigin =
+      process.env.NEXT_PUBLIC_API_URL?.replace("/api/v1", "") || "http://localhost:8000";
+    return `${backendOrigin}${url}`;
   };
 
   return (
