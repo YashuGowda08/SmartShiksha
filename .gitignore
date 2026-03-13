@@ -11,6 +11,10 @@ bin
 lib
 include
 
+# Keep frontend source libs tracked (needed by Next.js imports)
+!frontend/src/lib/
+!frontend/src/lib/**
+
 # Next.js
 frontend/.next/
 frontend/out/
