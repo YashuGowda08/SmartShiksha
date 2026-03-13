@@ -26,14 +26,15 @@ services:
     plan: standard
     
     buildCommand: >
+      cd frontend &&
       npm install &&
       npm run build
     
-    startCommand: npm start
+    startCommand: cd frontend && npm start
     
     envVars:
       - key: NEXT_PUBLIC_API_URL
-        value: https://smartshiksha-backend.onrender.com/api/v1
+        value: https://smartshiksha.onrender.com/api/v1
     
     routes:
       - path: /
