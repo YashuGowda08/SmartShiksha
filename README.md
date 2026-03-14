@@ -38,7 +38,7 @@ Smart Shiksha is a free, AI-powered education platform designed for Class 8–12
 
 ### Backend
 - **Framework:** FastAPI 0.109.0 (Python 3.13)
-- **Database:** SQLite via SQLAlchemy 2.0 (async) + aiosqlite
+- **Database:** MangoDB
 - **AI:** Groq Cloud API → LLaMA 3.3 70B Versatile via LangChain
 - **Auth:** Clerk JWT verification (python-jose)
 - **PDF Generation:** ReportLab
